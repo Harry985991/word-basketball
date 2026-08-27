@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07111f" />
+    <meta
+      name="description"
+      content="把每天的英文單字練習，變成一場四節籃球挑戰。"
+    />
+    <title>單字籃球王</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="brand-button" data-action="home" aria-label="回到首頁">
+          <span class="brand-ball" aria-hidden="true"></span>
+          <span>
+            <strong>單字籃球王</strong>
+            <small>WORD COURT</small>
+          </span>
+        </button>
+        <button class="cloud-button" id="cloudButton" data-action="cloud">
+          <span class="cloud-dot" aria-hidden="true"></span>
+          <span id="cloudLabel">裝置紀錄</span>
+        </button>
+      </header>
+
+      <main id="app" aria-live="polite"></main>
+
+      <nav class="bottom-nav" aria-label="主要功能">
+        <button data-action="home" class="nav-item is-active" id="homeNav">
+          <span aria-hidden="true">⌂</span>
+          首頁
+        </button>
+        <button data-action="stats" class="nav-item" id="statsNav">
+          <span aria-hidden="true">▥</span>
+          單字戰績
+        </button>
+        <button data-action="locker" class="nav-item" id="lockerNav">
+          <span aria-hidden="true">★</span>
+          新秀更衣室
+        </button>
+      </nav>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
