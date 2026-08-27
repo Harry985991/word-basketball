@@ -5,6 +5,11 @@
       "firebase.json",
       "firestore.rules",
       "README.md",
+      ".git/**",
+      ".github/**",
+      ".playwright-cli/**",
+      ".gitignore",
+      ".nojekyll",
       "output/**",
       "**/.*",
       "**/node_modules/**"
