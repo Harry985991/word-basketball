@@ -2,9 +2,55 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function validPublicPlayer() {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+               'version', 'name', 'number', 'xp', 'wins', 'losses', 'games', 'equipped', 'updatedAt'
+             ])
+             && data.version == 1
+             && data.name is string
+             && data.name.size() >= 1
+             && data.name.size() <= 12
+             && data.number is int
+             && data.number >= 0
+             && data.number <= 99
+             && data.xp is int
+             && data.xp >= 0
+             && data.xp <= 1000000
+             && data.wins is int
+             && data.wins >= 0
+             && data.wins <= 100000
+             && data.losses is int
+             && data.losses >= 0
+             && data.losses <= 100000
+             && data.games is int
+             && data.games >= 0
+             && data.games <= 100000
+             && data.equipped is map
+             && data.equipped.keys().hasOnly([
+               'skin', 'hair', 'jersey', 'shoes', 'wristband', 'court'
+             ])
+             && data.equipped.skin is string
+             && data.equipped.hair is string
+             && data.equipped.jersey is string
+             && data.equipped.shoes is string
+             && data.equipped.wristband is string
+             && data.equipped.court is string
+             && data.updatedAt is timestamp;
+    }
+
     match /users/{userId}/game/{document=**} {
       allow read, write: if request.auth != null
                          && request.auth.uid == userId;
+    }
+
+    match /publicPlayers/{userId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
+                            && validPublicPlayer();
+      allow delete: if request.auth != null
+                    && request.auth.uid == userId;
     }
   }
 }

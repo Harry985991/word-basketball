@@ -7,6 +7,7 @@ const OFFICIAL_SITE_URL = "https://word-basketball-0204.firebaseapp.com/";
 const app = document.querySelector("#app");
 const homeNav = document.querySelector("#homeNav");
 const statsNav = document.querySelector("#statsNav");
+const leagueNav = document.querySelector("#leagueNav");
 const lockerNav = document.querySelector("#lockerNav");
 const cloudButton = document.querySelector("#cloudButton");
 const cloudLabel = document.querySelector("#cloudLabel");
@@ -24,6 +25,8 @@ let firebaseServices = null;
 let accountChoiceResolve = null;
 let cloudConnecting = false;
 let cloudRestoring = true;
+let activeScreen = "home";
+let statsFilter = "all";
 
 const LEVELS = [
   { level: 1, name: "新秀訓練營", xp: 0, opponent: "街頭野狼" },
@@ -163,6 +166,7 @@ function persistState() {
     window.clearTimeout(cloud.saveTimer);
     cloud.saveTimer = window.setTimeout(() => cloud.save(gameState), 350);
   }
+  schedulePublicProfileSync();
 }
 
 function getTaipeiDate() {
@@ -284,6 +288,57 @@ function getSummary() {
   };
 }
 
+function buildPublicProfile() {
+  const player = gameState.player;
+  return {
+    version: 1,
+    name: String(player.name || "ROOKIE").slice(0, 12),
+    number: Math.min(99, Math.max(0, Number(player.number) || 0)),
+    xp: Math.max(0, Math.round(Number(player.xp) || 0)),
+    wins: Math.max(0, Math.round(Number(player.wins) || 0)),
+    losses: Math.max(0, Math.round(Number(player.losses) || 0)),
+    games: gameState.sessions.filter((session) => session.kind === "daily").length,
+    equipped: {
+      skin: player.equipped.skin,
+      hair: player.equipped.hair,
+      jersey: player.equipped.jersey,
+      shoes: player.equipped.shoes,
+      wristband: player.equipped.wristband,
+      court: player.equipped.court,
+    },
+  };
+}
+
+function publicProfileFingerprint(profile = buildPublicProfile()) {
+  return JSON.stringify(profile);
+}
+
+function schedulePublicProfileSync({ force = false } = {}) {
+  if (!cloud?.savePublic) return;
+  const profile = buildPublicProfile();
+  const fingerprint = publicProfileFingerprint(profile);
+  if (!force && cloud.publicFingerprint === fingerprint) return;
+  window.clearTimeout(cloud.publicSaveTimer);
+  cloud.publicSaveTimer = window.setTimeout(async () => {
+    try {
+      await cloud.savePublic(profile);
+      if (cloud) cloud.publicFingerprint = fingerprint;
+    } catch (error) {
+      console.error("Public player sync failed", error);
+    }
+  }, 250);
+}
+
+async function flushPublicProfile({ force = false } = {}) {
+  if (!cloud?.savePublic) return;
+  const profile = buildPublicProfile();
+  const fingerprint = publicProfileFingerprint(profile);
+  if (!force && cloud.publicFingerprint === fingerprint) return;
+  window.clearTimeout(cloud.publicSaveTimer);
+  await cloud.savePublic(profile);
+  if (cloud) cloud.publicFingerprint = fingerprint;
+}
+
 function getDailyStreak() {
   const dates = [...new Set(
     gameState.sessions.filter((session) => session.kind === "daily").map((session) => session.date),
@@ -308,8 +363,7 @@ function getNextLevel() {
   return LEVELS.find((item) => item.level === current.level + 1) || current;
 }
 
-function renderAvatar(size = "large") {
-  const player = gameState.player;
+function renderAvatar(size = "large", player = gameState.player) {
   const safeName = escapeHtml(player.name);
   const skin = GEAR.skin.find((item) => item.id === player.equipped.skin) || GEAR.skin[1];
   const hair = GEAR.hair.find((item) => item.id === player.equipped.hair) || GEAR.hair[0];
@@ -329,8 +383,10 @@ function renderAvatar(size = "large") {
 }
 
 function setActiveNav(name) {
+  activeScreen = name;
   homeNav.classList.toggle("is-active", name === "home");
   statsNav.classList.toggle("is-active", name === "stats");
+  leagueNav.classList.toggle("is-active", name === "league");
   lockerNav.classList.toggle("is-active", name === "locker");
 }
 
@@ -595,6 +651,16 @@ function startGame(kind, fixedMode = null) {
   renderQuestion();
 }
 
+function scrollMobileIntoView(selector, block = "center") {
+  if (!window.matchMedia?.("(max-width: 720px)").matches) return;
+  window.setTimeout(() => {
+    const target = document.querySelector(selector);
+    if (!target) return;
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    target.scrollIntoView({ behavior, block });
+  }, 100);
+}
+
 function renderQuestion() {
   setActiveNav("");
   const question = currentSession.questions[currentSession.index];
@@ -632,6 +698,7 @@ function renderQuestion() {
   if (!isChoice) {
     window.setTimeout(() => document.querySelector("#spellingInput")?.focus(), 0);
   }
+  scrollMobileIntoView(".screen-header", "start");
 }
 
 function renderChoiceQuestion(word) {
@@ -792,6 +859,7 @@ function renderFeedback(word, question, feedback) {
       </div>
     </div>`,
   );
+  scrollMobileIntoView('[data-action="next-question"]', "center");
 }
 
 function nextQuestion() {
@@ -825,6 +893,7 @@ function renderHalftime() {
       </div>
       <button class="primary-button" data-action="continue-game">進入下半場</button>
     </section>`;
+  scrollMobileIntoView(".halftime-screen", "start");
 }
 
 function finishSession() {
@@ -924,36 +993,177 @@ function renderResults(session) {
     </section>
   `;
   currentSession = session;
+  scrollMobileIntoView(".screen-header", "start");
+}
+
+function normalizePublicPlayer(data = {}) {
+  const fallback = emptyState().player;
+  return {
+    name: typeof data.name === "string" ? data.name.slice(0, 12) : fallback.name,
+    number: Math.min(99, Math.max(0, Number(data.number) || 0)),
+    xp: Math.max(0, Math.round(Number(data.xp) || 0)),
+    wins: Math.max(0, Math.round(Number(data.wins) || 0)),
+    losses: Math.max(0, Math.round(Number(data.losses) || 0)),
+    games: Math.max(0, Math.round(Number(data.games) || 0)),
+    equipped: { ...fallback.equipped, ...(data.equipped || {}) },
+  };
+}
+
+function renderLeaguePlayer(entry, rank) {
+  const player = entry.player;
+  const level = getPlayerLevel(player.xp);
+  const games = Math.max(player.games, player.wins + player.losses);
+  const winRate = games ? Math.round((player.wins / games) * 100) : 0;
+  const isCurrent = entry.id === cloud?.user?.uid;
+  return `
+    <article class="league-card ${isCurrent ? "is-current" : ""}">
+      <div class="league-rank ${rank <= 3 ? "is-podium" : ""}">${rank}</div>
+      ${renderAvatar("small", player)}
+      <div class="league-player-copy">
+        <span>LV.${level.level} · ${level.name}</span>
+        <h3>${escapeHtml(player.name)} #${player.number}</h3>
+        <small>${player.xp} XP${isCurrent ? " · 目前玩家" : ""}</small>
+      </div>
+      <div class="league-record">
+        <strong>${player.wins}－${player.losses}</strong>
+        <span>${games} 場 · 勝率 ${winRate}%</span>
+      </div>
+    </article>`;
+}
+
+async function renderLeague() {
+  setActiveNav("league");
+  if (!cloud?.user) {
+    app.innerHTML = `
+      <div class="screen-header"><div><p class="eyebrow">LEAGUE STANDINGS</p><h2>球員榜</h2><p>登入後查看球員彼此的等級與戰績。</p></div></div>
+      <section class="league-empty">
+        <span class="league-ball" aria-hidden="true"></span>
+        <h3>先登入球員才能進入聯盟</h3>
+        <p>球員榜只公開遊戲暱稱、等級、XP 與勝敗，不會顯示 Google 信箱或錯題內容。</p>
+        <button class="primary-button" data-action="cloud">Google 登入</button>
+      </section>`;
+    return;
+  }
+
+  app.innerHTML = `
+    <div class="screen-header"><div><p class="eyebrow">LEAGUE STANDINGS</p><h2>球員榜</h2><p>依 XP、勝場與勝率排列目前球員戰績。</p></div></div>
+    <div class="league-loading">正在整理聯盟戰績…</div>`;
+  try {
+    await flushPublicProfile();
+    const services = await getFirebaseServices();
+    const snapshot = await services.firestoreModule.getDocs(
+      services.firestoreModule.collection(services.db, "publicPlayers"),
+    );
+    if (activeScreen !== "league") return;
+    const players = snapshot.docs
+      .map((docSnapshot) => ({ id: docSnapshot.id, player: normalizePublicPlayer(docSnapshot.data()) }))
+      .sort((left, right) => {
+        const xpDifference = right.player.xp - left.player.xp;
+        if (xpDifference) return xpDifference;
+        const winDifference = right.player.wins - left.player.wins;
+        if (winDifference) return winDifference;
+        const leftGames = Math.max(left.player.games, left.player.wins + left.player.losses);
+        const rightGames = Math.max(right.player.games, right.player.wins + right.player.losses);
+        const leftRate = leftGames ? left.player.wins / leftGames : 0;
+        const rightRate = rightGames ? right.player.wins / rightGames : 0;
+        if (rightRate !== leftRate) return rightRate - leftRate;
+        return left.player.name.localeCompare(right.player.name, "zh-Hant");
+      });
+    app.innerHTML = `
+      <div class="screen-header">
+        <div><p class="eyebrow">LEAGUE STANDINGS</p><h2>球員榜</h2><p>依 XP、勝場與勝率排列目前球員戰績。</p></div>
+        <div class="quick-card"><span>聯盟球員</span><strong>${players.length} 人</strong></div>
+      </div>
+      <section class="league-list">
+        ${players.length
+          ? players.map((entry, index) => renderLeaguePlayer(entry, index + 1)).join("")
+          : `<div class="empty-state">聯盟還沒有球員資料，完成第一場比賽就會登上球員榜。</div>`}
+      </section>
+      <p class="league-privacy">球員榜不顯示 Google 信箱、UID、錯題或完整作答紀錄。</p>`;
+  } catch (error) {
+    console.error("League standings failed", error);
+    if (activeScreen !== "league") return;
+    app.innerHTML = `
+      <div class="screen-header"><div><p class="eyebrow">LEAGUE STANDINGS</p><h2>球員榜</h2></div></div>
+      <div class="empty-state">目前無法讀取球員榜，請稍後再試。</div>`;
+  }
+}
+
+function getWrongRate(stat) {
+  return stat.attempts ? stat.wrong / stat.attempts : 0;
+}
+
+function isSevereMistake(stat) {
+  return stat.wrong >= 3 || (stat.wrong >= 2 && getWrongRate(stat) >= 0.5);
+}
+
+function getMistakeCategory(stat) {
+  if (isSevereMistake(stat)) return "severe";
+  if (stat.wrong >= 1) return "minor";
+  return "clear";
+}
+
+function getSortedWordStats(filter = "all") {
+  return WORDS
+    .map((word) => ({ word, stat: getWordStat(word.id) }))
+    .filter(({ stat }) => filter === "all" || getMistakeCategory(stat) === filter)
+    .sort((left, right) => {
+      const leftUnseen = left.stat.attempts === 0;
+      const rightUnseen = right.stat.attempts === 0;
+      if (leftUnseen !== rightUnseen) return leftUnseen ? 1 : -1;
+      const rateDifference = getWrongRate(right.stat) - getWrongRate(left.stat);
+      if (rateDifference) return rateDifference;
+      const wrongDifference = right.stat.wrong - left.stat.wrong;
+      if (wrongDifference) return wrongDifference;
+      const attemptDifference = right.stat.attempts - left.stat.attempts;
+      if (attemptDifference) return attemptDifference;
+      return left.word.word.localeCompare(right.word.word);
+    });
 }
 
 function renderStats() {
   setActiveNav("stats");
   const summary = getSummary();
+  const severeCount = WORDS.filter((word) => getMistakeCategory(getWordStat(word.id)) === "severe").length;
+  const minorCount = WORDS.filter((word) => getMistakeCategory(getWordStat(word.id)) === "minor").length;
+  const entries = getSortedWordStats(statsFilter);
   app.innerHTML = `
     <div class="screen-header">
-      <div><p class="eyebrow">PLAYER BOX SCORE</p><h2>單字戰績</h2><p>每個單字的作答次數、答對比例與兩種題型表現。</p></div>
+      <div><p class="eyebrow">PLAYER BOX SCORE</p><h2>單字戰績</h2><p>依答錯率由高到低排列，優先找出需要加強的單字。</p></div>
       <div class="quick-card"><span>總命中率</span><strong>${summary.accuracy}%</strong></div>
     </div>
+    <div class="stats-filters" role="group" aria-label="篩選單字戰績">
+      <button class="stats-filter ${statsFilter === "all" ? "is-active" : ""}" data-action="stats-filter" data-filter="all">全部 <span>${WORDS.length}</span></button>
+      <button class="stats-filter is-severe ${statsFilter === "severe" ? "is-active" : ""}" data-action="stats-filter" data-filter="severe">嚴重失誤 <span>${severeCount}</span></button>
+      <button class="stats-filter is-minor ${statsFilter === "minor" ? "is-active" : ""}" data-action="stats-filter" data-filter="minor">小失誤 <span>${minorCount}</span></button>
+    </div>
+    <p class="stats-filter-note">嚴重失誤：錯 3 次以上，或至少錯 2 次且答錯率達 50%；其他曾答錯單字列為小失誤。</p>
     <section class="word-stats-grid">
-      ${WORDS.map((word) => renderWordStat(word, getWordStat(word.id))).join("")}
+      ${entries.length
+        ? entries.map(({ word, stat }) => renderWordStat(word, stat)).join("")
+        : `<div class="empty-state stats-empty">這個分類目前沒有單字。</div>`}
     </section>
   `;
 }
 
 function renderWordStat(word, stat) {
   const accuracy = stat.attempts ? Math.round((stat.correct / stat.attempts) * 100) : 0;
-  const choiceAccuracy = stat.choiceAttempts ? Math.round((stat.choiceCorrect / stat.choiceAttempts) * 100) : 0;
-  const spellingAccuracy = stat.spellingAttempts ? Math.round((stat.spellingCorrect / stat.spellingAttempts) * 100) : 0;
+  const wrongRate = stat.attempts ? Math.round(getWrongRate(stat) * 100) : 0;
+  const choiceAccuracy = stat.choiceAttempts ? `${Math.round((stat.choiceCorrect / stat.choiceAttempts) * 100)}%` : "—";
+  const spellingAccuracy = stat.spellingAttempts ? `${Math.round((stat.spellingCorrect / stat.spellingAttempts) * 100)}%` : "—";
+  const category = getMistakeCategory(stat);
+  const mistakeLabel = stat.attempts ? `答錯率 ${wrongRate}% · 錯 ${stat.wrong}/${stat.attempts}` : "尚未作答";
   return `
-    <article class="stat-card">
+    <article class="stat-card is-${category}">
       <div class="word-stat-head">
         <div><h3>${word.word}</h3><span class="part-of-speech">${word.chinese}</span></div>
-        <div class="accuracy-ring" style="--progress:${accuracy}%" data-label="${accuracy}%"></div>
+        <div class="accuracy-ring" style="--progress:${accuracy}%" data-label="${stat.attempts ? `${accuracy}%` : "—"}"></div>
       </div>
+      <div class="mistake-summary">${mistakeLabel}</div>
       <div class="stat-card-meta">
         <div><span>作答</span><strong>${stat.attempts} 次</strong></div>
-        <div><span>兩分球</span><strong>${choiceAccuracy}%</strong></div>
-        <div><span>三分球</span><strong>${spellingAccuracy}%</strong></div>
+        <div><span>兩分球</span><strong>${choiceAccuracy}</strong></div>
+        <div><span>三分球</span><strong>${spellingAccuracy}</strong></div>
       </div>
     </article>
   `;
@@ -1119,14 +1329,22 @@ async function getFirebaseServices() {
 }
 
 function attachCloudUser(user, stateRef, services) {
+  const publicRef = services.firestoreModule.doc(services.db, "publicPlayers", user.uid);
   cloud = {
     user,
     auth: services.auth,
     authModule: services.authModule,
     saveTimer: null,
+    publicSaveTimer: null,
+    publicFingerprint: null,
     save: (nextState) => services.firestoreModule.setDoc(stateRef, nextState),
+    savePublic: (profile) => services.firestoreModule.setDoc(publicRef, {
+      ...profile,
+      updatedAt: services.firestoreModule.serverTimestamp(),
+    }),
   };
   localStorage.setItem(accountStorageKey(user.uid), JSON.stringify(gameState));
+  schedulePublicProfileSync({ force: true });
   updateCloudIdentity(user);
 }
 
@@ -1210,6 +1428,7 @@ async function connectCloud({ forceRedirect = false } = {}) {
 async function signOutPlayer({ switchAccount = false } = {}) {
   try {
     if (cloud?.save) await cloud.save(gameState);
+    if (cloud?.savePublic) await flushPublicProfile({ force: true });
     const services = await getFirebaseServices();
     await services.authModule.signOut(services.auth);
     cloud = null;
@@ -1299,6 +1518,7 @@ document.addEventListener("click", (event) => {
   const action = button.dataset.action;
   if (action === "home") renderHome();
   if (action === "stats") renderStats();
+  if (action === "league") renderLeague();
   if (action === "locker") renderLocker();
   if (action === "warmup") renderWarmup();
   if (action === "daily") {
@@ -1313,6 +1533,10 @@ document.addEventListener("click", (event) => {
   if (action === "practice-choice") startGame("practice", "choice");
   if (action === "practice-spelling") startGame("practice", "spelling");
   if (action === "answer-choice") submitAnswer(button.dataset.answer);
+  if (action === "stats-filter") {
+    statsFilter = button.dataset.filter || "all";
+    renderStats();
+  }
   if (action === "next-question") nextQuestion();
   if (action === "continue-game") renderQuestion();
   if (action === "speak") speakWord(button.dataset.word);

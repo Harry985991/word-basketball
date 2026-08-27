@@ -17,7 +17,7 @@
       href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260828-1" />
   </head>
   <body>
     <div class="app-shell">
@@ -49,15 +49,19 @@
           <span aria-hidden="true">▥</span>
           單字戰績
         </button>
+        <button data-action="league" class="nav-item" id="leagueNav">
+          <span aria-hidden="true">♟</span>
+          球員榜
+        </button>
         <button data-action="locker" class="nav-item" id="lockerNav">
           <span aria-hidden="true">★</span>
-          新秀更衣室
+          更衣室
         </button>
       </nav>
     </div>
 
     <div class="toast" id="toast" role="status"></div>
     <div class="account-modal" id="accountModal" hidden></div>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=20260828-1"></script>
   </body>
 </html>
