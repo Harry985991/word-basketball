@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#07111f" />
+    <link rel="canonical" href="https://word-basketball-0204.firebaseapp.com/" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23ff7a1a'/%3E%3Cpath d='M2 32h60M32 2c-12 9-12 51 0 60M32 2c12 9 12 51 0 60' fill='none' stroke='%2307111f' stroke-width='4'/%3E%3C/svg%3E" />
     <meta
       name="description"
@@ -28,11 +29,11 @@
             <small>WORD COURT</small>
           </span>
         </button>
-        <button class="cloud-button" id="cloudButton" data-action="cloud">
+        <button class="cloud-button" id="cloudButton" data-action="cloud" disabled aria-busy="true">
           <span class="cloud-dot" aria-hidden="true"></span>
           <span class="cloud-copy">
-            <strong id="cloudLabel">Google 登入</strong>
-            <small id="cloudIdentity">尚未登入玩家</small>
+            <strong id="cloudLabel">登入準備中…</strong>
+            <small id="cloudIdentity">正在確認玩家</small>
           </span>
         </button>
       </header>

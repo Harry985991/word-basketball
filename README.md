@@ -30,8 +30,12 @@ Firebase 專案為 `word-basketball-0204`。玩家點選右上角「裝置紀錄
 
 Firebase Web 設定不等於管理員密鑰；任何 service account、私鑰或管理員憑證都不得放進本專案。
 
-## GitHub Pages
+## 正式網站
 
-正式網站：<https://harry985991.github.io/word-basketball/>
+正式網站：<https://word-basketball-0204.firebaseapp.com/>
+
+原始碼持續由 GitHub 管理；Firebase Hosting 與 Firebase Authentication 使用相同網域，讓手機與桌機的 Google 登入更穩定。GitHub Pages 仍保留為預覽網址。
 
 Repository：<https://github.com/Harry985991/word-basketball>
+
+GitHub Pages 預覽：<https://harry985991.github.io/word-basketball/>

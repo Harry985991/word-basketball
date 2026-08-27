@@ -3,6 +3,7 @@ import { WORDS } from "./words.js";
 const STORAGE_KEY = "word-basketball-state-v1";
 const ACCOUNT_STORAGE_PREFIX = "word-basketball-account-v1:";
 const TAIPEI_TIMEZONE = "Asia/Taipei";
+const OFFICIAL_SITE_URL = "https://word-basketball-0204.firebaseapp.com/";
 const app = document.querySelector("#app");
 const homeNav = document.querySelector("#homeNav");
 const statsNav = document.querySelector("#statsNav");
@@ -19,8 +20,10 @@ let currentQuestionStartedAt = 0;
 let toastTimer = null;
 let cloud = null;
 let firebaseServicesPromise = null;
+let firebaseServices = null;
 let accountChoiceResolve = null;
 let cloudConnecting = false;
+let cloudRestoring = true;
 
 const LEVELS = [
   { level: 1, name: "新秀訓練營", xp: 0, opponent: "街頭野狼" },
@@ -975,13 +978,50 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 3200);
 }
 
+function isFilePreview() {
+  return window.location.protocol === "file:";
+}
+
+function isOfficialAuthOrigin() {
+  return window.location.origin === new URL(OFFICIAL_SITE_URL).origin;
+}
+
+function shouldUseRedirectLogin() {
+  if (!isOfficialAuthOrigin()) return false;
+  return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches
+    || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function consumeLoginRequest() {
+  const url = new URL(window.location.href);
+  const shouldLogin = url.searchParams.get("login") === "1";
+  if (shouldLogin) {
+    url.searchParams.delete("login");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+  return shouldLogin;
+}
+
+function showCloudPreparing() {
+  cloudRestoring = true;
+  cloudButton.disabled = true;
+  cloudButton.setAttribute("aria-busy", "true");
+  cloudLabel.textContent = "登入準備中…";
+  cloudIdentity.textContent = "正在確認玩家";
+  cloudButton.setAttribute("aria-label", "Google 登入準備中");
+}
+
 function updateCloudIdentity(user = cloud?.user) {
+  cloudButton.disabled = false;
   if (!user) {
     cloudButton.classList.remove("is-connected");
     cloudButton.removeAttribute("aria-busy");
     cloudLabel.textContent = "Google 登入";
-    cloudIdentity.textContent = "尚未登入玩家";
-    cloudButton.setAttribute("aria-label", "使用 Google 帳號登入");
+    cloudIdentity.textContent = isFilePreview() ? "點此開啟正式網站" : "尚未登入玩家";
+    cloudButton.setAttribute(
+      "aria-label",
+      isFilePreview() ? "前往正式網站使用 Google 帳號登入" : "使用 Google 帳號登入",
+    );
     return;
   }
   const playerName = user.displayName || gameState.player.name || "PLAYER";
@@ -1067,7 +1107,13 @@ async function getFirebaseServices() {
     const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
     const auth = authModule.getAuth(firebaseApp);
     await authModule.setPersistence(auth, authModule.browserLocalPersistence);
-    return { auth, authModule, db: firestoreModule.getFirestore(firebaseApp), firestoreModule };
+    firebaseServices = {
+      auth,
+      authModule,
+      db: firestoreModule.getFirestore(firebaseApp),
+      firestoreModule,
+    };
+    return firebaseServices;
   })();
   return firebaseServicesPromise;
 }
@@ -1114,27 +1160,47 @@ async function loadCloudPlayer(user, localCandidate, services) {
   return true;
 }
 
-async function connectCloud() {
+async function connectCloud({ forceRedirect = false } = {}) {
+  if (isFilePreview()) {
+    window.location.assign(`${OFFICIAL_SITE_URL}?login=1`);
+    return;
+  }
   if (cloud?.user) {
     openAccountPanel();
     return;
   }
-  if (cloudConnecting) return;
+  if (cloudConnecting || cloudRestoring) return;
+  if (!firebaseServices) {
+    showToast("登入服務仍在準備，請稍後再按一次。");
+    return;
+  }
   cloudConnecting = true;
+  cloudButton.disabled = true;
   cloudLabel.textContent = "連線中…";
   cloudIdentity.textContent = "請選擇 Google 玩家";
   cloudButton.setAttribute("aria-busy", "true");
   try {
-    const services = await getFirebaseServices();
+    const services = firebaseServices;
     const provider = new services.authModule.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
     const localCandidate = loadStateFromKey(STORAGE_KEY);
+    if (forceRedirect || shouldUseRedirectLogin()) {
+      await services.authModule.signInWithRedirect(services.auth, provider);
+      updateCloudIdentity();
+      return;
+    }
     const result = await services.authModule.signInWithPopup(services.auth, provider);
     await loadCloudPlayer(result.user, localCandidate, services);
   } catch (error) {
     console.error("Cloud connection failed", error);
     updateCloudIdentity();
-    showToast("這次沒有完成登入，訪客紀錄仍保留在這台裝置。 ");
+    if (error?.code === "auth/popup-blocked") {
+      showToast("登入視窗被瀏覽器阻擋，請允許彈出視窗後重試。");
+    } else if (error?.code === "auth/popup-closed-by-user") {
+      showToast("已取消登入，訪客紀錄仍保留在這台裝置。");
+    } else {
+      showToast("這次沒有完成登入，訪客紀錄仍保留在這台裝置。");
+    }
   } finally {
     cloudConnecting = false;
     cloudButton.removeAttribute("aria-busy");
@@ -1153,7 +1219,11 @@ async function signOutPlayer({ switchAccount = false } = {}) {
     updateCloudIdentity();
     renderHome();
     showToast(switchAccount ? "已登出，請選擇下一位玩家。" : "已登出，現在使用這台裝置的訪客紀錄。");
-    if (switchAccount) await connectCloud();
+    if (switchAccount && isOfficialAuthOrigin()) {
+      await connectCloud({ forceRedirect: true });
+    } else if (switchAccount) {
+      showToast("已登出，請再按一次 Google 登入來選擇新玩家。");
+    }
   } catch (error) {
     console.error("Sign out failed", error);
     showToast("登出沒有完成，請稍後再試。");
@@ -1161,23 +1231,40 @@ async function signOutPlayer({ switchAccount = false } = {}) {
 }
 
 async function restoreCloudSession() {
+  if (isFilePreview()) {
+    cloudRestoring = false;
+    updateCloudIdentity();
+    return;
+  }
+  let startRequestedLogin = false;
   try {
     const services = await getFirebaseServices();
     await services.auth.authStateReady();
-    if (!services.auth.currentUser) {
-      updateCloudIdentity();
-      return;
+    const redirectResult = isOfficialAuthOrigin()
+      ? await services.authModule.getRedirectResult(services.auth)
+      : null;
+    const user = redirectResult?.user || services.auth.currentUser;
+    if (!user) {
+      startRequestedLogin = consumeLoginRequest();
+    } else {
+      consumeLoginRequest();
+      const cachedState = loadStateFromKey(accountStorageKey(user.uid));
+      if (hasMeaningfulProgress(cachedState)) {
+        gameState = cachedState;
+        renderHome();
+      }
+      await loadCloudPlayer(user, loadStateFromKey(STORAGE_KEY), services);
     }
-    const cachedState = loadStateFromKey(accountStorageKey(services.auth.currentUser.uid));
-    if (hasMeaningfulProgress(cachedState)) {
-      gameState = cachedState;
-      renderHome();
-    }
-    await loadCloudPlayer(services.auth.currentUser, loadStateFromKey(STORAGE_KEY), services);
   } catch (error) {
     console.error("Cloud session restore failed", error);
     updateCloudIdentity();
+  } finally {
+    cloudRestoring = false;
+    cloudButton.disabled = false;
+    cloudButton.removeAttribute("aria-busy");
+    if (!cloud?.user && !cloudConnecting) updateCloudIdentity();
   }
+  if (startRequestedLogin) await connectCloud({ forceRedirect: true });
 }
 
 app.addEventListener("submit", (event) => {
@@ -1259,5 +1346,5 @@ document.addEventListener("click", (event) => {
 });
 
 renderHome();
-updateCloudIdentity();
+showCloudPreparing();
 restoreCloudSession();
