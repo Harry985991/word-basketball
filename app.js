@@ -486,24 +486,30 @@ function startGame(kind, fixedMode = null) {
     const lastDailySession = todayDailySessions[0];
     const usedReviewIds = todayDailySessions.flatMap((session) =>
       (session.answers || []).filter((answer) => answer.source === "review").map((answer) => answer.wordId));
-    const replayReviewIds = alreadyPlayedDaily
-      ? selectReviewIds(plan.newIds, [
-        ...usedReviewIds,
+    if (alreadyPlayedDaily) {
+      const replayLimit = Math.min(
+        20,
+        WORDS.filter((word) => getWordStat(word.id).attempts > 0).length,
+      );
+      const replayIds = buildReviewCandidates([], [
         ...(lastDailySession?.answers || []).map((answer) => answer.wordId),
-      ])
-      : plan.reviewIds;
-    questions = [
-      ...plan.newIds.map((id) => ({
-        id,
-        mode: alreadyPlayedDaily && getWordStat(id).choiceCorrect > 0 ? "spelling" : "choice",
-        source: alreadyPlayedDaily ? "review" : "new",
-      })),
-      ...replayReviewIds.map((id) => ({
+        ...usedReviewIds,
+      ]).slice(0, replayLimit).map((item) => item.id);
+      questions = replayIds.map((id) => ({
         id,
         mode: getWordStat(id).choiceCorrect > 0 ? "spelling" : "choice",
         source: "review",
-      })),
-    ];
+      }));
+    } else {
+      questions = [
+        ...plan.newIds.map((id) => ({ id, mode: "choice", source: "new" })),
+        ...plan.reviewIds.map((id) => ({
+          id,
+          mode: getWordStat(id).choiceCorrect > 0 ? "spelling" : "choice",
+          source: "review",
+        })),
+      ];
+    }
   } else {
     questions = shuffle(WORDS).map((word) => ({ id: word.id, mode: fixedMode, source: "practice" }));
   }
