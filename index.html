@@ -30,7 +30,10 @@
         </button>
         <button class="cloud-button" id="cloudButton" data-action="cloud">
           <span class="cloud-dot" aria-hidden="true"></span>
-          <span id="cloudLabel">裝置紀錄</span>
+          <span class="cloud-copy">
+            <strong id="cloudLabel">Google 登入</strong>
+            <small id="cloudIdentity">尚未登入玩家</small>
+          </span>
         </button>
       </header>
 
@@ -53,6 +56,7 @@
     </div>
 
     <div class="toast" id="toast" role="status"></div>
+    <div class="account-modal" id="accountModal" hidden></div>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 import { WORDS } from "./words.js";
 
 const STORAGE_KEY = "word-basketball-state-v1";
+const ACCOUNT_STORAGE_PREFIX = "word-basketball-account-v1:";
 const TAIPEI_TIMEZONE = "Asia/Taipei";
 const app = document.querySelector("#app");
 const homeNav = document.querySelector("#homeNav");
@@ -8,6 +9,8 @@ const statsNav = document.querySelector("#statsNav");
 const lockerNav = document.querySelector("#lockerNav");
 const cloudButton = document.querySelector("#cloudButton");
 const cloudLabel = document.querySelector("#cloudLabel");
+const cloudIdentity = document.querySelector("#cloudIdentity");
+const accountModal = document.querySelector("#accountModal");
 const toast = document.querySelector("#toast");
 
 let gameState = loadLocalState();
@@ -15,6 +18,9 @@ let currentSession = null;
 let currentQuestionStartedAt = 0;
 let toastTimer = null;
 let cloud = null;
+let firebaseServicesPromise = null;
+let accountChoiceResolve = null;
+let cloudConnecting = false;
 
 const LEVELS = [
   { level: 1, name: "新秀訓練營", xp: 0, opponent: "街頭野狼" },
@@ -104,17 +110,52 @@ function normalizeState(saved) {
   };
 }
 
-function loadLocalState() {
+function accountStorageKey(uid) {
+  return `${ACCOUNT_STORAGE_PREFIX}${uid}`;
+}
+
+function loadStateFromKey(key) {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const saved = JSON.parse(localStorage.getItem(key));
     return normalizeState(saved);
   } catch {
     return emptyState();
   }
 }
 
+function loadLocalState() {
+  return loadStateFromKey(STORAGE_KEY);
+}
+
+function hasMeaningfulProgress(state) {
+  return Boolean(
+    state.sessions?.length
+    || Object.values(state.wordStats || {}).some((stat) => stat.attempts > 0)
+    || state.player?.xp > 0
+    || state.player?.name !== "ROOKIE",
+  );
+}
+
+function progressFingerprint(state) {
+  const stats = Object.fromEntries(
+    Object.entries(state.wordStats || {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return JSON.stringify({
+    sessions: (state.sessions || []).map((session) => session.id),
+    stats,
+    player: {
+      name: state.player?.name,
+      number: state.player?.number,
+      xp: state.player?.xp,
+      wins: state.player?.wins,
+      losses: state.player?.losses,
+    },
+  });
+}
+
 function persistState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(gameState));
+  const storageKey = cloud?.user ? accountStorageKey(cloud.user.uid) : STORAGE_KEY;
+  localStorage.setItem(storageKey, JSON.stringify(gameState));
   if (cloud?.user && cloud?.save) {
     window.clearTimeout(cloud.saveTimer);
     cloud.saveTimer = window.setTimeout(() => cloud.save(gameState), 350);
@@ -934,53 +975,208 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => toast.classList.remove("is-visible"), 3200);
 }
 
-async function connectCloud() {
-  if (cloud?.user) {
-    showToast(`已使用 ${cloud.user.email || "Google 帳號"} 同步`);
+function updateCloudIdentity(user = cloud?.user) {
+  if (!user) {
+    cloudButton.classList.remove("is-connected");
+    cloudButton.removeAttribute("aria-busy");
+    cloudLabel.textContent = "Google 登入";
+    cloudIdentity.textContent = "尚未登入玩家";
+    cloudButton.setAttribute("aria-label", "使用 Google 帳號登入");
     return;
   }
+  const playerName = user.displayName || gameState.player.name || "PLAYER";
+  cloudButton.classList.add("is-connected");
+  cloudButton.removeAttribute("aria-busy");
+  cloudLabel.textContent = `玩家：${playerName}`;
+  cloudIdentity.textContent = user.email || "Google 帳號";
+  cloudButton.setAttribute("aria-label", `目前玩家 ${playerName}，開啟帳號選單`);
+}
 
-  const { firebaseConfig } = await import("./firebase-config.js");
-  if (!firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("YOUR_")) {
-    showToast("Firebase 尚未設定；目前成績會安全保存在這台裝置。 ");
-    return;
-  }
+function closeAccountModal() {
+  accountModal.hidden = true;
+  accountModal.innerHTML = "";
+}
 
-  cloudLabel.textContent = "連線中…";
-  try {
-    const [{ initializeApp }, authModule, firestoreModule] = await Promise.all([
+function openAccountPanel() {
+  if (!cloud?.user) return;
+  const displayName = cloud.user.displayName || gameState.player.name || "PLAYER";
+  accountModal.innerHTML = `
+    <button class="account-scrim" data-action="close-account" aria-label="關閉玩家選單"></button>
+    <section class="account-dialog" role="dialog" aria-modal="true" aria-labelledby="accountTitle" tabindex="-1">
+      <p class="eyebrow">CURRENT PLAYER</p>
+      <h2 id="accountTitle">目前登入玩家</h2>
+      <div class="account-player-card">
+        <span class="account-initial">${escapeHtml(displayName.slice(0, 1).toUpperCase())}</span>
+        <div><strong>${escapeHtml(displayName)}</strong><small>${escapeHtml(cloud.user.email || "Google 帳號")}</small></div>
+      </div>
+      <p class="account-note">這個帳號的闖關、XP、錯題與正確率會獨立同步。</p>
+      <div class="account-actions">
+        <button class="primary-button" data-action="switch-account">切換玩家</button>
+        <button class="secondary-button" data-action="sign-out">登出</button>
+        <button class="text-button" data-action="close-account">返回遊戲</button>
+      </div>
+    </section>`;
+  accountModal.hidden = false;
+  accountModal.querySelector(".account-dialog")?.focus();
+}
+
+function requestNewPlayerChoice(user, localState) {
+  const canImport = hasMeaningfulProgress(localState);
+  return new Promise((resolve) => {
+    accountChoiceResolve = resolve;
+    accountModal.innerHTML = `
+      <button class="account-scrim" data-action="cancel-new-account" aria-label="取消登入"></button>
+      <section class="account-dialog choice-dialog" role="dialog" aria-modal="true" aria-labelledby="newPlayerTitle" tabindex="-1">
+        <p class="eyebrow">NEW GOOGLE PLAYER</p>
+        <h2 id="newPlayerTitle">第一次使用這個帳號</h2>
+        <p class="account-email">${escapeHtml(user.email || "Google 帳號")}</p>
+        <div class="account-choice-grid">
+          <button class="account-choice" data-action="create-new-player">
+            <span>01</span><strong>建立全新球員</strong><small>從 0 XP 開始，不帶入其他人的紀錄。</small>
+          </button>
+          <button class="account-choice" data-action="import-local-progress" ${canImport ? "" : "disabled"}>
+            <span>02</span><strong>匯入本機紀錄</strong><small>${canImport ? "帶入這台裝置尚未登入時的闖關紀錄。" : "這台裝置目前沒有可匯入的訪客紀錄。"}</small>
+          </button>
+        </div>
+        <button class="text-button" data-action="cancel-new-account">取消登入</button>
+      </section>`;
+    accountModal.hidden = false;
+    accountModal.querySelector(".account-dialog")?.focus();
+  });
+}
+
+function resolveAccountChoice(choice) {
+  const resolve = accountChoiceResolve;
+  accountChoiceResolve = null;
+  closeAccountModal();
+  resolve?.(choice);
+}
+
+async function getFirebaseServices() {
+  if (firebaseServicesPromise) return firebaseServicesPromise;
+  firebaseServicesPromise = (async () => {
+    const { firebaseConfig } = await import("./firebase-config.js");
+    if (!firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("YOUR_")) {
+      throw new Error("Firebase is not configured");
+    }
+    const [{ initializeApp, getApps, getApp }, authModule, firestoreModule] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js"),
       import("https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js"),
     ]);
-    const firebaseApp = initializeApp(firebaseConfig);
+    const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
     const auth = authModule.getAuth(firebaseApp);
     await authModule.setPersistence(auth, authModule.browserLocalPersistence);
-    const result = await authModule.signInWithPopup(auth, new authModule.GoogleAuthProvider());
-    const db = firestoreModule.getFirestore(firebaseApp);
-    const stateRef = firestoreModule.doc(db, "users", result.user.uid, "game", "main");
-    const cloudSnapshot = await firestoreModule.getDoc(stateRef);
+    return { auth, authModule, db: firestoreModule.getFirestore(firebaseApp), firestoreModule };
+  })();
+  return firebaseServicesPromise;
+}
 
-    if (cloudSnapshot.exists()) {
-      gameState = normalizeState(cloudSnapshot.data());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(gameState));
-    } else {
-      await firestoreModule.setDoc(stateRef, gameState);
+function attachCloudUser(user, stateRef, services) {
+  cloud = {
+    user,
+    auth: services.auth,
+    authModule: services.authModule,
+    saveTimer: null,
+    save: (nextState) => services.firestoreModule.setDoc(stateRef, nextState),
+  };
+  localStorage.setItem(accountStorageKey(user.uid), JSON.stringify(gameState));
+  updateCloudIdentity(user);
+}
+
+async function loadCloudPlayer(user, localCandidate, services) {
+  const stateRef = services.firestoreModule.doc(services.db, "users", user.uid, "game", "main");
+  const cloudSnapshot = await services.firestoreModule.getDoc(stateRef);
+  if (cloudSnapshot.exists()) {
+    gameState = normalizeState(cloudSnapshot.data());
+    if (
+      hasMeaningfulProgress(localCandidate)
+      && progressFingerprint(localCandidate) === progressFingerprint(gameState)
+    ) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyState()));
     }
+  } else {
+    const choice = await requestNewPlayerChoice(user, localCandidate);
+    if (choice === "cancel") {
+      await services.authModule.signOut(services.auth);
+      cloud = null;
+      updateCloudIdentity();
+      renderHome();
+      return false;
+    }
+    gameState = choice === "import" ? normalizeState(localCandidate) : emptyState();
+    await services.firestoreModule.setDoc(stateRef, gameState);
+  }
+  attachCloudUser(user, stateRef, services);
+  currentSession = null;
+  renderHome();
+  showToast(`已載入 ${user.displayName || user.email || "Google 玩家"} 的獨立紀錄。`);
+  return true;
+}
 
-    cloud = {
-      user: result.user,
-      saveTimer: null,
-      save: (nextState) => firestoreModule.setDoc(stateRef, nextState),
-    };
-    cloudButton.classList.add("is-connected");
-    cloudLabel.textContent = result.user.displayName || "雲端同步中";
-    showToast("雲端同步完成，其他裝置可使用同一帳號接續。 ");
-    renderHome();
+async function connectCloud() {
+  if (cloud?.user) {
+    openAccountPanel();
+    return;
+  }
+  if (cloudConnecting) return;
+  cloudConnecting = true;
+  cloudLabel.textContent = "連線中…";
+  cloudIdentity.textContent = "請選擇 Google 玩家";
+  cloudButton.setAttribute("aria-busy", "true");
+  try {
+    const services = await getFirebaseServices();
+    const provider = new services.authModule.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    const localCandidate = loadStateFromKey(STORAGE_KEY);
+    const result = await services.authModule.signInWithPopup(services.auth, provider);
+    await loadCloudPlayer(result.user, localCandidate, services);
   } catch (error) {
     console.error("Cloud connection failed", error);
-    cloudLabel.textContent = "裝置紀錄";
-    showToast("這次沒有連上雲端，裝置內紀錄仍會保留。 ");
+    updateCloudIdentity();
+    showToast("這次沒有完成登入，訪客紀錄仍保留在這台裝置。 ");
+  } finally {
+    cloudConnecting = false;
+    cloudButton.removeAttribute("aria-busy");
+  }
+}
+
+async function signOutPlayer({ switchAccount = false } = {}) {
+  try {
+    if (cloud?.save) await cloud.save(gameState);
+    const services = await getFirebaseServices();
+    await services.authModule.signOut(services.auth);
+    cloud = null;
+    gameState = loadStateFromKey(STORAGE_KEY);
+    currentSession = null;
+    closeAccountModal();
+    updateCloudIdentity();
+    renderHome();
+    showToast(switchAccount ? "已登出，請選擇下一位玩家。" : "已登出，現在使用這台裝置的訪客紀錄。");
+    if (switchAccount) await connectCloud();
+  } catch (error) {
+    console.error("Sign out failed", error);
+    showToast("登出沒有完成，請稍後再試。");
+  }
+}
+
+async function restoreCloudSession() {
+  try {
+    const services = await getFirebaseServices();
+    await services.auth.authStateReady();
+    if (!services.auth.currentUser) {
+      updateCloudIdentity();
+      return;
+    }
+    const cachedState = loadStateFromKey(accountStorageKey(services.auth.currentUser.uid));
+    if (hasMeaningfulProgress(cachedState)) {
+      gameState = cachedState;
+      renderHome();
+    }
+    await loadCloudPlayer(services.auth.currentUser, loadStateFromKey(STORAGE_KEY), services);
+  } catch (error) {
+    console.error("Cloud session restore failed", error);
+    updateCloudIdentity();
   }
 }
 
@@ -1034,6 +1230,12 @@ document.addEventListener("click", (event) => {
   if (action === "continue-game") renderQuestion();
   if (action === "speak") speakWord(button.dataset.word);
   if (action === "cloud") connectCloud();
+  if (action === "close-account") closeAccountModal();
+  if (action === "sign-out") signOutPlayer();
+  if (action === "switch-account") signOutPlayer({ switchAccount: true });
+  if (action === "create-new-player") resolveAccountChoice("new");
+  if (action === "import-local-progress") resolveAccountChoice("import");
+  if (action === "cancel-new-account") resolveAccountChoice("cancel");
   if (action === "toggle-sound") {
     gameState.player.soundEnabled = !gameState.player.soundEnabled;
     persistState();
@@ -1057,3 +1259,5 @@ document.addEventListener("click", (event) => {
 });
 
 renderHome();
+updateCloudIdentity();
+restoreCloudSession();
