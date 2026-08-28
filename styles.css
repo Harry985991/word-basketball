@@ -299,6 +299,24 @@ h2 {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.secondary-button.is-next-day {
+  border-color: rgba(201, 255, 57, 0.5);
+  color: var(--lime);
+  background: rgba(201, 255, 57, 0.08);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.primary-button:disabled:hover,
+.secondary-button:disabled:hover {
+  transform: none;
+  filter: none;
+}
+
 .hero-scoreboard {
   position: relative;
   z-index: 1;

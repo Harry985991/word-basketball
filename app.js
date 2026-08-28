@@ -180,6 +180,22 @@ function getTaipeiDate() {
   return `${map.year}-${map.month}-${map.day}`;
 }
 
+function addCalendarDays(dateKey, days) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const target = new Date(Date.UTC(year, month - 1, day + days));
+  return target.toISOString().slice(0, 10);
+}
+
+function getChallengeDate(session) {
+  return session.challengeDate || session.date;
+}
+
+function hasCompletedChallenge(challengeDate) {
+  return gameState.sessions.some(
+    (session) => session.kind === "daily" && getChallengeDate(session) === challengeDate,
+  );
+}
+
 function formatDuration(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -224,8 +240,7 @@ function getWordStat(id) {
   };
 }
 
-function buildReviewCandidates(newIds, excludedIds = []) {
-  const date = getTaipeiDate();
+function buildReviewCandidates(newIds, excludedIds = [], targetDate = getTaipeiDate()) {
   const excluded = new Set(excludedIds);
   return WORDS.filter(
     (word) => !newIds.includes(word.id) && getWordStat(word.id).attempts > 0,
@@ -233,7 +248,7 @@ function buildReviewCandidates(newIds, excludedIds = []) {
     .map((word) => {
       const stat = getWordStat(word.id);
       const accuracy = stat.attempts ? stat.correct / stat.attempts : 0;
-      const due = !stat.nextReviewAt || stat.nextReviewAt <= date ? 4 : 0;
+      const due = !stat.nextReviewAt || stat.nextReviewAt <= targetDate ? 4 : 0;
       const notRecentlyUsed = excluded.has(word.id) ? 0 : 8;
       return {
         id: word.id,
@@ -243,35 +258,65 @@ function buildReviewCandidates(newIds, excludedIds = []) {
     .sort((a, b) => b.priority - a.priority);
 }
 
-function selectReviewIds(newIds, excludedIds = []) {
-  return buildReviewCandidates(newIds, excludedIds).slice(0, 10).map((item) => item.id);
+function selectReviewIds(newIds, excludedIds = [], targetDate = getTaipeiDate()) {
+  return buildReviewCandidates(newIds, excludedIds, targetDate).slice(0, 10).map((item) => item.id);
 }
 
-function getDailyPlan() {
-  const date = getTaipeiDate();
-  const savedPlan = gameState.dayPlans[date];
+function getIntroducedWordIds(excludedDate) {
+  return new Set(
+    Object.entries(gameState.dayPlans)
+      .filter(([date]) => date !== excludedDate)
+      .flatMap(([, plan]) => plan.newIds || []),
+  );
+}
+
+function getDailyPlan(targetDate = getTaipeiDate()) {
+  const savedPlan = gameState.dayPlans[targetDate];
   if (savedPlan) {
     if (savedPlan.wordBankSize !== WORDS.length) {
+      const introducedIds = getIntroducedWordIds(targetDate);
+      const addedNewIds = WORDS.filter(
+        (word) => !(savedPlan.newIds || []).includes(word.id) && !introducedIds.has(word.id),
+      ).slice(0, Math.max(0, 10 - (savedPlan.newIds || []).length)).map((word) => word.id);
       savedPlan.wordBankSize = WORDS.length;
-      savedPlan.reviewIds = selectReviewIds(savedPlan.newIds || []);
+      savedPlan.newIds = [...(savedPlan.newIds || []), ...addedNewIds];
+      savedPlan.reviewIds = selectReviewIds(savedPlan.newIds || [], [], targetDate);
       persistState();
     }
     return savedPlan;
   }
 
-  const unseen = WORDS.filter((word) => getWordStat(word.id).attempts === 0);
+  const introducedIds = getIntroducedWordIds(targetDate);
+  const unseen = WORDS.filter((word) => !introducedIds.has(word.id));
   const newIds = unseen.slice(0, 10).map((word) => word.id);
 
   const plan = {
-    date,
+    date: targetDate,
     createdAt: new Date().toISOString(),
     wordBankSize: WORDS.length,
     newIds,
-    reviewIds: selectReviewIds(newIds),
+    reviewIds: selectReviewIds(newIds, [], targetDate),
   };
-  gameState.dayPlans[date] = plan;
+  gameState.dayPlans[targetDate] = plan;
   persistState();
   return plan;
+}
+
+function getNextDayChallengeState() {
+  const today = getTaipeiDate();
+  const date = addCalendarDays(today, 1);
+  if (!hasCompletedChallenge(today)) {
+    return { date, plan: null, available: false, completed: false, questionCount: 0 };
+  }
+  const plan = getDailyPlan(date);
+  const questionCount = plan.newIds.length + plan.reviewIds.length;
+  return {
+    date,
+    plan,
+    questionCount,
+    completed: hasCompletedChallenge(date),
+    available: plan.newIds.length === 10 && plan.reviewIds.length === 10,
+  };
 }
 
 function getSummary() {
@@ -395,9 +440,8 @@ function renderHome() {
   const plan = getDailyPlan();
   const summary = getSummary();
   const questionCount = plan.newIds.length + plan.reviewIds.length;
-  const hasFinishedToday = gameState.sessions.some(
-    (session) => session.date === plan.date && session.kind === "daily",
-  );
+  const hasFinishedToday = hasCompletedChallenge(plan.date);
+  const nextDay = hasFinishedToday ? getNextDayChallengeState() : null;
   const dailyLabel = hasFinishedToday ? "再次挑戰" : "開始今日比賽";
   const possibleScore = plan.newIds.reduce(
     (sum, id) => sum + (hasFinishedToday && getWordStat(id).choiceCorrect > 0 ? 3 : 2),
@@ -422,6 +466,13 @@ function renderHome() {
         <div class="hero-actions">
           <button class="primary-button" data-action="daily">${dailyLabel} · ${questionCount} 題</button>
           <button class="secondary-button" data-action="warmup">查看賽前熱身</button>
+          ${nextDay?.completed
+            ? `<button class="secondary-button" disabled>明日挑戰已提前完成</button>`
+            : nextDay?.available
+              ? `<button class="secondary-button is-next-day" data-action="next-day">提前挑戰明日賽事 · ${nextDay.questionCount} 題</button>`
+              : hasFinishedToday
+                ? `<button class="secondary-button" disabled>下一波單字尚未開放</button>`
+                : ""}
         </div>
       </div>
       <div class="hero-player-zone">
@@ -488,19 +539,20 @@ function renderHome() {
   `;
 }
 
-function renderWarmup() {
+function renderWarmup(challengeDate = getTaipeiDate()) {
   setActiveNav("");
-  const plan = getDailyPlan();
+  const plan = getDailyPlan(challengeDate);
+  const isToday = plan.date === getTaipeiDate();
   const ids = plan.newIds.length ? plan.newIds : WORDS.map((word) => word.id);
   app.innerHTML = `
     <div class="screen-header">
-      <div><p class="eyebrow">PRE-GAME WARM-UP</p><h2>賽前熱身</h2><p>先認識今天的單字與球場情境，再進入比賽。</p></div>
+      <div><p class="eyebrow">PRE-GAME WARM-UP</p><h2>${isToday ? "今日" : "明日"}賽前熱身</h2><p>先認識${isToday ? "今天" : "明天"}的 10 個新字與球場情境，再進入比賽。</p></div>
       <button class="secondary-button" data-action="home">返回首頁</button>
     </div>
     <section class="warmup-grid">
       ${ids.map((id) => renderWarmupCard(getWord(id))).join("")}
     </section>
-    <div class="sticky-action"><button class="primary-button" data-action="start-daily">熱身完成，開始比賽</button></div>
+    <div class="sticky-action"><button class="primary-button" data-action="start-daily" data-challenge-date="${plan.date}">熱身完成，開始${isToday ? "今日" : "明日"}比賽</button></div>
   `;
 }
 
@@ -571,20 +623,18 @@ function renderGearGroup(slot, title, currentLevel) {
   }).join("")}</div></section>`;
 }
 
-function startGame(kind, fixedMode = null) {
-  const plan = getDailyPlan();
+function startGame(kind, fixedMode = null, challengeDate = getTaipeiDate()) {
+  const plan = getDailyPlan(kind === "daily" ? challengeDate : getTaipeiDate());
   const level = getPlayerLevel();
-  const alreadyPlayedDaily = gameState.sessions.some(
-    (session) => session.date === plan.date && session.kind === "daily",
-  );
+  const alreadyPlayedDaily = hasCompletedChallenge(plan.date);
   let questions;
 
   if (kind === "daily") {
-    const todayDailySessions = gameState.sessions.filter(
-      (session) => session.date === plan.date && session.kind === "daily",
+    const challengeSessions = gameState.sessions.filter(
+      (session) => getChallengeDate(session) === plan.date && session.kind === "daily",
     );
-    const lastDailySession = todayDailySessions[0];
-    const usedReviewIds = todayDailySessions.flatMap((session) =>
+    const lastDailySession = challengeSessions[0];
+    const usedReviewIds = challengeSessions.flatMap((session) =>
       (session.answers || []).filter((answer) => answer.source === "review").map((answer) => answer.wordId));
     if (alreadyPlayedDaily) {
       const replayLimit = Math.min(
@@ -594,7 +644,7 @@ function startGame(kind, fixedMode = null) {
       const replayIds = buildReviewCandidates([], [
         ...(lastDailySession?.answers || []).map((answer) => answer.wordId),
         ...usedReviewIds,
-      ]).slice(0, replayLimit).map((item) => item.id);
+      ], plan.date).slice(0, replayLimit).map((item) => item.id);
       questions = replayIds.map((id) => ({
         id,
         mode: getWordStat(id).choiceCorrect > 0 ? "spelling" : "choice",
@@ -624,6 +674,7 @@ function startGame(kind, fixedMode = null) {
     kind,
     fixedMode,
     date: getTaipeiDate(),
+    challengeDate: kind === "daily" ? plan.date : getTaipeiDate(),
     startedAt: new Date().toISOString(),
     questions: kind === "daily" ? questions : shuffle(questions),
     index: 0,
@@ -685,7 +736,7 @@ function renderQuestion() {
     <div class="progress-track"><div class="progress-fill" style="width:${progress}%"></div></div>
     <section class="court-panel court-${gameState.player.equipped.court}">
       <div class="question-meta">
-        <span>${question.source === "new" ? "今日新字" : question.source === "review" ? "歷史複習" : "自由練習"} · 連續命中 ${currentSession.streak}</span>
+        <span>${question.source === "new" ? (getChallengeDate(currentSession) === getTaipeiDate() ? "今日新字" : "明日新字") : question.source === "review" ? "歷史複習" : "自由練習"} · 連續命中 ${currentSession.streak}</span>
         <span class="shot-badge ${isChoice ? "" : "is-three"}">${isChoice ? "2 POINT SHOT" : "3 POINT SHOT"}</span>
       </div>
       <div class="shot-stage" aria-hidden="true"><span class="game-hoop"></span><span class="game-ball" id="gameBall"></span><span class="shot-call" id="shotCall"></span></div>
@@ -954,6 +1005,8 @@ function renderResults(session) {
   );
   const starterTarget = Math.max(1, Math.ceil(possibleScore * 0.7));
   const outcomeTitle = session.playerWon ? "勝利！" : session.isTie ? "平手，再戰一場！" : "惜敗，準備逆轉！";
+  const canOfferNextDay = session.kind === "daily" && getChallengeDate(session) === getTaipeiDate();
+  const nextDay = canOfferNextDay ? getNextDayChallengeState() : null;
   app.innerHTML = `
     <div class="screen-header"><div><p class="eyebrow">FINAL BOX SCORE</p><h2>比賽結束</h2></div></div>
     <section class="result-hero ${session.playerWon ? "is-win" : ""}">
@@ -977,7 +1030,14 @@ function renderResults(session) {
         return `<span><b>${badge.icon}</b>${badge.name}</span>`;
       }).join("")}</div>` : ""}
       <div class="result-actions">
-        <button class="primary-button" data-action="replay">再次挑戰</button>
+        ${nextDay?.available && !nextDay.completed
+          ? `<button class="primary-button" data-action="next-day">提前挑戰明日賽事 · ${nextDay.questionCount} 題</button>`
+          : nextDay?.completed
+            ? `<button class="secondary-button" disabled>明日挑戰已提前完成</button>`
+            : canOfferNextDay
+              ? `<button class="secondary-button" disabled>下一波單字尚未開放</button>`
+              : ""}
+        <button class="${nextDay?.available && !nextDay.completed ? "secondary-button" : "primary-button"}" data-action="replay">再次挑戰</button>
         <button class="secondary-button" data-action="locker">查看解鎖裝備</button>
         <button class="secondary-button" data-action="home">回到首頁</button>
       </div>
@@ -1523,13 +1583,17 @@ document.addEventListener("click", (event) => {
   if (action === "warmup") renderWarmup();
   if (action === "daily") {
     const plan = getDailyPlan();
-    const hasFinishedToday = gameState.sessions.some(
-      (session) => session.date === plan.date && session.kind === "daily",
-    );
+    const hasFinishedToday = hasCompletedChallenge(plan.date);
     if (!hasFinishedToday && plan.newIds.length) renderWarmup();
-    else startGame("daily");
+    else startGame("daily", null, plan.date);
   }
-  if (action === "start-daily") startGame("daily");
+  if (action === "next-day") {
+    const nextDay = getNextDayChallengeState();
+    if (nextDay.completed) showToast("明日挑戰已經完成，可以再次挑戰今日題組。");
+    else if (nextDay.available) renderWarmup(nextDay.date);
+    else showToast("完成今日挑戰並等待下一波 10 個新字開放。");
+  }
+  if (action === "start-daily") startGame("daily", null, button.dataset.challengeDate || getTaipeiDate());
   if (action === "practice-choice") startGame("practice", "choice");
   if (action === "practice-spelling") startGame("practice", "spelling");
   if (action === "answer-choice") submitAnswer(button.dataset.answer);
@@ -1566,7 +1630,7 @@ document.addEventListener("click", (event) => {
     }
   }
   if (action === "quit" && window.confirm("要先離開這場比賽嗎？目前這場尚未完成。")) renderHome();
-  if (action === "replay") startGame(currentSession.kind, currentSession.fixedMode);
+  if (action === "replay") startGame(currentSession.kind, currentSession.fixedMode, getChallengeDate(currentSession));
 });
 
 renderHome();
