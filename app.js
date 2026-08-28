@@ -417,7 +417,7 @@ function renderHome() {
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">${level.name} · GAME ${summary.gamesToday + 1}</p>
-        <h1>把單字<br />投進腦袋裡。</h1>
+        <h1>單字上場，<br />準備得分！</h1>
         <p>今天用 NBA 球星的籃球情境挑戰 ${plan.newIds.length} 個新字，答對選擇題得兩分，成功拼字就投進三分球。</p>
         <div class="hero-actions">
           <button class="primary-button" data-action="daily">${dailyLabel} · ${questionCount} 題</button>
