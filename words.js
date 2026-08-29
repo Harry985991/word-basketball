@@ -389,4 +389,14 @@ export const WORDS = [
     options: ["活躍的；積極的", "行動；動作", "演員", "活動"],
     confusions: ["action＝行動", "actor＝演員", "activity＝活動"],
   },
+  {
+    id: "activity",
+    word: "activity",
+    chinese: "活動",
+    partOfSpeech: "noun",
+    sentence: "Stephen Curry joins a basketball activity for young fans.",
+    sentenceZh: "Stephen Curry 參加一場為年輕球迷舉辦的籃球活動。",
+    options: ["活動", "行動；動作", "活躍的；積極的", "演員"],
+    confusions: ["action＝行動", "active＝活躍的", "actor＝演員"],
+  },
 ];

@@ -1,4 +1,4 @@
-import { WORDS } from "./words.js?v=20260829-3";
+import { WORDS } from "./words.js?v=20260829-4";
 
 const STORAGE_KEY = "word-basketball-state-v1";
 const ACCOUNT_STORAGE_PREFIX = "word-basketball-account-v1:";
