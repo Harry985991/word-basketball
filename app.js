@@ -1,4 +1,4 @@
-import { WORDS } from "./words.js";
+import { WORDS } from "./words.js?v=20260829-3";
 
 const STORAGE_KEY = "word-basketball-state-v1";
 const ACCOUNT_STORAGE_PREFIX = "word-basketball-account-v1:";
@@ -768,6 +768,7 @@ function renderSpellingQuestion(word) {
   let revealedFirstLetter = false;
   const mask = [...word.word].map((character) => {
     if (character === " ") return '<span class="word-gap" aria-hidden="true">/</span>';
+    if (!/[a-z]/i.test(character)) return escapeHtml(character);
     if (!hideFirstLetter && !revealedFirstLetter && /[a-z]/i.test(character)) {
       revealedFirstLetter = true;
       return escapeHtml(character);
